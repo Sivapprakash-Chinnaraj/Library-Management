@@ -45,6 +45,7 @@ pipeline {
         stage('Docker run') {
             steps{
                 sh '''
+                    docker rm -f library-management || true
                     docker run -d --name library-management -p 9000:8000 $IMAGE_NAME
                 '''
             }
