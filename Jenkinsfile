@@ -15,7 +15,7 @@ pipeline {
 		stage('Docker build') {
 			steps {
 				sh '''
-                    docker build -t $IMAGE_NAME:v1 .
+                    docker build -t $IMAGE_NAME .
                 '''
 			}
 		}
@@ -38,14 +38,14 @@ pipeline {
         stage('Docker push') {
             steps{
                 sh '''
-                    docker push $IMAGE_NAME:v1
+                    docker push $IMAGE_NAME
                 '''
             }
         }
         stage('Docker run') {
             steps{
                 sh '''
-                    docker run -d --name library-management -p 9000:8000 $IMAGE_NAME:v1
+                    docker run -d --name library-management -p 9000:8000 $IMAGE_NAME
                 '''
             }
         }
