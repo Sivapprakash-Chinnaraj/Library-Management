@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="row justify-content-center mt-5">
+    <div class="col-md-5">
+        <div class="card shadow-sm">
+            <div class="card-header bg-primary text-white text-center">
+                <h4 class="mb-0">Secure Login</h4>
+            </div>
+            <div class="card-body p-4">
+                <form method="POST" action="/">
+                    
+                    <div class="mb-3">
+                        <label for="email" class="form-label">Email Address</label>
+                        <input type="email" class="form-control" id="email" name="email" required autofocus>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <label for="password" class="form-label">Password</label>
+                        <input type="password" class="form-control" id="password" name="password" required>
+                    </div>
+                    
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary btn-lg">Sign In</button>
+                    </div>
+                    
+                </form>
+                
+                <div class="mt-4 text-muted small text-center">
+                    <p class="mb-1"><strong>Test Accounts:</strong></p>
+                    <p class="mb-0">Staff: <code>admin@library.com</code> | Pass: <code>password123</code></p>
+                    <p>Student: <code>alice@example.com</code> | Pass: <code>password123</code></p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
