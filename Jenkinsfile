@@ -3,6 +3,7 @@ pipeline {
 
 	environment {
         IMAGE_NAME = "sivapprakash1634/library-management"
+        CONTAINER_NAME = "library-management"
     }
 
 	stages {
@@ -45,8 +46,8 @@ pipeline {
         stage('Docker run') {
             steps{
                 sh '''
-                    docker rm -f library-management || true
-                    docker run -d --name library-management -p 9000:8000 $IMAGE_NAME
+                    docker rm -f $CONTAINER_NAME || true
+                    docker run -d --name $CONTAINER_NAME -p 9000:8000 $IMAGE_NAME
                 '''
             }
         }
