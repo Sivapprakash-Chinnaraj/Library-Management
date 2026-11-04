@@ -1,4 +1,5 @@
-import sqlite3
+import pymysql
+import pymysql.cursors
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from config import Config
 from datetime import date, timedelta
@@ -7,8 +8,15 @@ app = Flask(__name__)
 app.config.from_object(Config)
 
 def get_db_connection():
-    conn = sqlite3.connect(app.config['DATABASE'])
-    conn.row_factory = sqlite3.Row
+    # Connects using PyMySQL with parameters defined in config.py
+    # Fallbacks are provided, but ideally pulled from os.environ
+    conn = pymysql.connect(
+        host=app.config.get('MYSQL_HOST', 'localhost'),
+        user=app.config.get('MYSQL_USER', 'admin'),
+        password=app.config.get('MYSQL_PASSWORD', ''),
+        database=app.config.get('MYSQL_DB', 'library'),
+        cursorclass=pymysql.cursors.DictCursor
+    )
     return conn
 
 # ---------------------------------------------------------------------------
@@ -21,7 +29,9 @@ def login():
         password = request.form['password']
         
         conn = get_db_connection()
-        user = conn.execute('SELECT * FROM users WHERE email = ? AND password = ?', (email, password)).fetchone()
+        with conn.cursor() as cursor:
+            cursor.execute('SELECT * FROM users WHERE email = %s AND password = %s', (email, password))
+            user = cursor.fetchone()
         conn.close()
         
         if user:
@@ -53,8 +63,9 @@ def staff_dashboard():
         return redirect(url_for('login'))
         
     conn = get_db_connection()
-    # Fetch metrics: total books, active users, overdue books, etc.
-    books = conn.execute('SELECT * FROM books ORDER BY added_on DESC LIMIT 5').fetchall()
+    with conn.cursor() as cursor:
+        cursor.execute('SELECT * FROM books ORDER BY added_on DESC LIMIT 5')
+        books = cursor.fetchall()
     conn.close()
     
     return render_template('staff_dashboard.html', books=books)
@@ -68,13 +79,14 @@ def student_dashboard():
         return redirect(url_for('login'))
         
     conn = get_db_connection()
-    # Fetch only the books borrowed by this specific student
-    my_books = conn.execute('''
-        SELECT books.title, books.author, borrowings.issue_date, borrowings.due_date, borrowings.status 
-        FROM borrowings 
-        JOIN books ON borrowings.book_id = books.id 
-        WHERE borrowings.user_id = ?
-    ''', (session['user_id'],)).fetchall()
+    with conn.cursor() as cursor:
+        cursor.execute('''
+            SELECT books.title, books.author, borrowings.issue_date, borrowings.due_date, borrowings.status 
+            FROM borrowings 
+            JOIN books ON borrowings.book_id = books.id 
+            WHERE borrowings.user_id = %s
+        ''', (session['user_id'],))
+        my_books = cursor.fetchall()
     conn.close()
     
     return render_template('student_dashboard.html', my_books=my_books)
@@ -88,7 +100,9 @@ def manage_books():
         return redirect(url_for('login'))
         
     conn = get_db_connection()
-    books = conn.execute('SELECT * FROM books ORDER BY id DESC').fetchall()
+    with conn.cursor() as cursor:
+        cursor.execute('SELECT * FROM books ORDER BY id DESC')
+        books = cursor.fetchall()
     conn.close()
     
     return render_template('books.html', books=books)
@@ -105,12 +119,12 @@ def add_book():
     
     conn = get_db_connection()
     try:
-        # For a new book, available copies equal total copies
-        conn.execute('INSERT INTO books (title, author, isbn, total_copies, available_copies) VALUES (?, ?, ?, ?, ?)',
-                     (title, author, isbn, copies, copies))
+        with conn.cursor() as cursor:
+            cursor.execute('INSERT INTO books (title, author, isbn, total_copies, available_copies) VALUES (%s, %s, %s, %s, %s)',
+                           (title, author, isbn, copies, copies))
         conn.commit()
         flash(f'"{title}" added successfully!', 'success')
-    except sqlite3.IntegrityError:
+    except pymysql.err.IntegrityError:
         flash('A book with this ISBN already exists in the catalog.', 'danger')
     finally:
         conn.close()
@@ -128,27 +142,28 @@ def edit_book(id):
     new_total = int(request.form['copies'])
     
     conn = get_db_connection()
-    old_book = conn.execute('SELECT total_copies, available_copies FROM books WHERE id = ?', (id,)).fetchone()
-    
-    if old_book:
-        # Calculate how the change in total copies affects available copies
-        delta = new_total - old_book['total_copies']
-        new_available = old_book['available_copies'] + delta
+    with conn.cursor() as cursor:
+        cursor.execute('SELECT total_copies, available_copies FROM books WHERE id = %s', (id,))
+        old_book = cursor.fetchone()
         
-        if new_available < 0:
-            flash('Cannot reduce total copies below the amount currently issued to students.', 'danger')
-        else:
-            try:
-                conn.execute('''
-                    UPDATE books 
-                    SET title = ?, author = ?, isbn = ?, total_copies = ?, available_copies = ? 
-                    WHERE id = ?
-                ''', (title, author, isbn, new_total, new_available, id))
-                conn.commit()
-                flash('Book updated successfully!', 'success')
-            except sqlite3.IntegrityError:
-                flash('ISBN already in use by another book.', 'danger')
-    
+        if old_book:
+            delta = new_total - old_book['total_copies']
+            new_available = old_book['available_copies'] + delta
+            
+            if new_available < 0:
+                flash('Cannot reduce total copies below the amount currently issued to students.', 'danger')
+            else:
+                try:
+                    cursor.execute('''
+                        UPDATE books 
+                        SET title = %s, author = %s, isbn = %s, total_copies = %s, available_copies = %s 
+                        WHERE id = %s
+                    ''', (title, author, isbn, new_total, new_available, id))
+                    conn.commit()
+                    flash('Book updated successfully!', 'success')
+                except pymysql.err.IntegrityError:
+                    flash('ISBN already in use by another book.', 'danger')
+                    
     conn.close()
     return redirect(url_for('manage_books'))
 
@@ -158,21 +173,22 @@ def delete_book(id):
         return redirect(url_for('login'))
         
     conn = get_db_connection()
-    
-    # Prevent deletion if the book is currently checked out
-    active_borrows = conn.execute('SELECT count(*) FROM borrowings WHERE book_id = ? AND status = "Issued"', (id,)).fetchone()[0]
-    
-    if active_borrows > 0:
-        flash('Cannot delete book. Copies are currently issued to users.', 'danger')
-    else:
-        conn.execute('DELETE FROM books WHERE id = ?', (id,))
-        # Clean up historical return records for this book to prevent orphaned data
-        conn.execute('DELETE FROM borrowings WHERE book_id = ?', (id,))
-        conn.commit()
-        flash('Book deleted successfully!', 'success')
+    with conn.cursor() as cursor:
+        # Use an alias 'count' so we can fetch it via DictCursor
+        cursor.execute('SELECT count(*) as count FROM borrowings WHERE book_id = %s AND status = "Issued"', (id,))
+        active_borrows = cursor.fetchone()['count']
         
+        if active_borrows > 0:
+            flash('Cannot delete book. Copies are currently issued to users.', 'danger')
+        else:
+            cursor.execute('DELETE FROM books WHERE id = %s', (id,))
+            cursor.execute('DELETE FROM borrowings WHERE book_id = %s', (id,))
+            conn.commit()
+            flash('Book deleted successfully!', 'success')
+            
     conn.close()
     return redirect(url_for('manage_books'))
+
 # ---------------------------------------------------------------------------
 # Staff Routes (Manage Users)
 # ---------------------------------------------------------------------------
@@ -182,7 +198,9 @@ def manage_users():
         return redirect(url_for('login'))
         
     conn = get_db_connection()
-    users = conn.execute('SELECT * FROM users ORDER BY role, name').fetchall()
+    with conn.cursor() as cursor:
+        cursor.execute('SELECT * FROM users ORDER BY role, name')
+        users = cursor.fetchall()
     conn.close()
     
     return render_template('users.html', users=users)
@@ -200,13 +218,14 @@ def add_user():
     
     conn = get_db_connection()
     try:
-        conn.execute(
-            'INSERT INTO users (name, email, password, role, phone) VALUES (?, ?, ?, ?, ?)',
-            (name, email, password, role, phone)
-        )
+        with conn.cursor() as cursor:
+            cursor.execute(
+                'INSERT INTO users (name, email, password, role, phone) VALUES (%s, %s, %s, %s, %s)',
+                (name, email, password, role, phone)
+            )
         conn.commit()
         flash(f'Account for {name} created successfully!', 'success')
-    except sqlite3.IntegrityError:
+    except pymysql.err.IntegrityError:
         flash('An account with this email already exists.', 'danger')
     finally:
         conn.close()
@@ -222,25 +241,24 @@ def edit_user(id):
     email = request.form['email']
     role = request.form['role']
     phone = request.form.get('phone', '')
-    
-    # Optional password update
     password = request.form.get('password')
     
     conn = get_db_connection()
     try:
-        if password:
-            conn.execute(
-                'UPDATE users SET name = ?, email = ?, password = ?, role = ?, phone = ? WHERE id = ?',
-                (name, email, password, role, phone, id)
-            )
-        else:
-            conn.execute(
-                'UPDATE users SET name = ?, email = ?, role = ?, phone = ? WHERE id = ?',
-                (name, email, role, phone, id)
-            )
+        with conn.cursor() as cursor:
+            if password:
+                cursor.execute(
+                    'UPDATE users SET name = %s, email = %s, password = %s, role = %s, phone = %s WHERE id = %s',
+                    (name, email, password, role, phone, id)
+                )
+            else:
+                cursor.execute(
+                    'UPDATE users SET name = %s, email = %s, role = %s, phone = %s WHERE id = %s',
+                    (name, email, role, phone, id)
+                )
         conn.commit()
         flash('User updated successfully!', 'success')
-    except sqlite3.IntegrityError:
+    except pymysql.err.IntegrityError:
         flash('Email address is already in use by another account.', 'danger')
     finally:
         conn.close()
@@ -252,29 +270,29 @@ def delete_user(id):
     if session.get('role') != 'staff':
         return redirect(url_for('login'))
         
-    # Prevent a user from deleting their own account
     if id == session.get('user_id'):
         flash('You cannot delete your own active session account.', 'danger')
         return redirect(url_for('manage_users'))
         
     conn = get_db_connection()
-    
-    # Check for active borrows
-    active_borrows = conn.execute(
-        'SELECT count(*) FROM borrowings WHERE user_id = ? AND status = "Issued"', 
-        (id,)
-    ).fetchone()[0]
-    
-    if active_borrows > 0:
-        flash('Cannot delete user. They have books currently checked out.', 'danger')
-    else:
-        conn.execute('DELETE FROM users WHERE id = ?', (id,))
-        conn.execute('DELETE FROM borrowings WHERE user_id = ?', (id,))
-        conn.commit()
-        flash('User account deleted successfully!', 'success')
+    with conn.cursor() as cursor:
+        cursor.execute(
+            'SELECT count(*) as count FROM borrowings WHERE user_id = %s AND status = "Issued"', 
+            (id,)
+        )
+        active_borrows = cursor.fetchone()['count']
         
+        if active_borrows > 0:
+            flash('Cannot delete user. They have books currently checked out.', 'danger')
+        else:
+            cursor.execute('DELETE FROM users WHERE id = %s', (id,))
+            cursor.execute('DELETE FROM borrowings WHERE user_id = %s', (id,))
+            conn.commit()
+            flash('User account deleted successfully!', 'success')
+            
     conn.close()
     return redirect(url_for('manage_users'))
+
 # ---------------------------------------------------------------------------
 # Staff Routes (Circulation Desk)
 # ---------------------------------------------------------------------------
@@ -284,24 +302,24 @@ def circulation():
         return redirect(url_for('login'))
         
     conn = get_db_connection()
-    
-    # Get students for the dropdown
-    students = conn.execute("SELECT id, name, email FROM users WHERE role = 'student' ORDER BY name").fetchall()
-    
-    # Get only books that are currently available to be checked out
-    available_books = conn.execute("SELECT id, title, available_copies FROM books WHERE available_copies > 0 ORDER BY title").fetchall()
-    
-    # Get all currently issued books for the returns table
-    active_borrows = conn.execute('''
-        SELECT borrowings.id, users.name as student_name, books.title as book_title, 
-               borrowings.issue_date, borrowings.due_date 
-        FROM borrowings 
-        JOIN users ON borrowings.user_id = users.id 
-        JOIN books ON borrowings.book_id = books.id 
-        WHERE borrowings.status = 'Issued'
-        ORDER BY borrowings.due_date ASC
-    ''').fetchall()
-    
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT id, name, email FROM users WHERE role = 'student' ORDER BY name")
+        students = cursor.fetchall()
+        
+        cursor.execute("SELECT id, title, available_copies FROM books WHERE available_copies > 0 ORDER BY title")
+        available_books = cursor.fetchall()
+        
+        cursor.execute('''
+            SELECT borrowings.id, users.name as student_name, books.title as book_title, 
+                   borrowings.issue_date, borrowings.due_date 
+            FROM borrowings 
+            JOIN users ON borrowings.user_id = users.id 
+            JOIN books ON borrowings.book_id = books.id 
+            WHERE borrowings.status = 'Issued'
+            ORDER BY borrowings.due_date ASC
+        ''')
+        active_borrows = cursor.fetchall()
+        
     conn.close()
     
     return render_template('issue_return.html', students=students, books=available_books, borrows=active_borrows)
@@ -315,28 +333,25 @@ def issue_book():
     book_id = request.form['book_id']
     
     issue_date = date.today()
-    due_date = issue_date + timedelta(days=14) # Standard 14-day checkout
+    due_date = issue_date + timedelta(days=14)
     
     conn = get_db_connection()
-    
-    # Double-check availability before inserting
-    book = conn.execute('SELECT available_copies FROM books WHERE id = ?', (book_id,)).fetchone()
-    
-    if book and book['available_copies'] > 0:
-        # Create the borrowing record
-        conn.execute('''
-            INSERT INTO borrowings (book_id, user_id, issue_date, due_date, status) 
-            VALUES (?, ?, ?, ?, 'Issued')
-        ''', (book_id, user_id, issue_date, due_date))
+    with conn.cursor() as cursor:
+        cursor.execute('SELECT available_copies FROM books WHERE id = %s', (book_id,))
+        book = cursor.fetchone()
         
-        # Decrement available copies
-        conn.execute('UPDATE books SET available_copies = available_copies - 1 WHERE id = ?', (book_id,))
-        
-        conn.commit()
-        flash('Book issued successfully!', 'success')
-    else:
-        flash('Sorry, this book is currently out of stock.', 'danger')
-        
+        if book and book['available_copies'] > 0:
+            cursor.execute('''
+                INSERT INTO borrowings (book_id, user_id, issue_date, due_date, status) 
+                VALUES (%s, %s, %s, %s, 'Issued')
+            ''', (book_id, user_id, issue_date, due_date))
+            
+            cursor.execute('UPDATE books SET available_copies = available_copies - 1 WHERE id = %s', (book_id,))
+            conn.commit()
+            flash('Book issued successfully!', 'success')
+        else:
+            flash('Sorry, this book is currently out of stock.', 'danger')
+            
     conn.close()
     return redirect(url_for('circulation'))
 
@@ -348,24 +363,21 @@ def return_book(borrow_id):
     return_date = date.today()
     
     conn = get_db_connection()
-    
-    # Get the book_id associated with this borrowing record
-    borrow = conn.execute('SELECT book_id FROM borrowings WHERE id = ?', (borrow_id,)).fetchone()
-    
-    if borrow:
-        # Mark as returned and set return date
-        conn.execute('''
-            UPDATE borrowings 
-            SET status = 'Returned', return_date = ? 
-            WHERE id = ?
-        ''', (return_date, borrow_id))
+    with conn.cursor() as cursor:
+        cursor.execute('SELECT book_id FROM borrowings WHERE id = %s', (borrow_id,))
+        borrow = cursor.fetchone()
         
-        # Increment available copies
-        conn.execute('UPDATE books SET available_copies = available_copies + 1 WHERE id = ?', (borrow['book_id'],))
-        
-        conn.commit()
-        flash('Book returned successfully!', 'success')
-        
+        if borrow:
+            cursor.execute('''
+                UPDATE borrowings 
+                SET status = 'Returned', return_date = %s 
+                WHERE id = %s
+            ''', (return_date, borrow_id))
+            
+            cursor.execute('UPDATE books SET available_copies = available_copies + 1 WHERE id = %s', (borrow['book_id'],))
+            conn.commit()
+            flash('Book returned successfully!', 'success')
+            
     conn.close()
     return redirect(url_for('circulation'))
 
