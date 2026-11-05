@@ -9,12 +9,12 @@ resource "aws_vpc" "library_vpc" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
-  tags = { Name = "library-app-vpc" }
+  tags = { Name = "VPC-for-library-app" }
 }
 
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.library_vpc.id
-  tags = { Name = "library-igw" }
+  tags = { Name = "library-app-igw" }
 }
 
 # ==========================================
@@ -25,21 +25,21 @@ resource "aws_subnet" "public_subnet" {
   cidr_block              = cidrsubnet(var.vpc_cidr, 8, 1) # Outputs 10.0.1.0/24
   map_public_ip_on_launch = true
   availability_zone       = "${var.aws_region}a"
-  tags = { Name = "library-public-subnet" }
+  tags = { Name = "Public-subnet-for-Library-app" }
 }
 
 resource "aws_subnet" "private_subnet_1" {
   vpc_id            = aws_vpc.library_vpc.id
   cidr_block        = cidrsubnet(var.vpc_cidr, 8, 2) # Outputs 10.0.2.0/24
   availability_zone = "${var.aws_region}a"
-  tags = { Name = "library-private-subnet-1" }
+  tags = { Name = "Private-subnet-for-Library-app-1" }
 }
 
 resource "aws_subnet" "private_subnet_2" {
   vpc_id            = aws_vpc.library_vpc.id
   cidr_block        = cidrsubnet(var.vpc_cidr, 8, 3) # Outputs 10.0.3.0/24
   availability_zone = "${var.aws_region}b"
-  tags = { Name = "library-private-subnet-2" }
+  tags = { Name = "Private-subnet-for-Library-app-2" }
 }
 
 # ==========================================
@@ -51,7 +51,7 @@ resource "aws_route_table" "public_rt" {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.igw.id
   }
-  tags = { Name = "library-public-rt" }
+  tags = { Name = "Library-app-rtb" }
 }
 
 resource "aws_route_table_association" "public_assoc" {
@@ -63,7 +63,7 @@ resource "aws_route_table_association" "public_assoc" {
 # 4. Security Groups
 # ==========================================
 resource "aws_security_group" "ec2_sg" {
-  name        = "library-ec2-sg"
+  name        = "Library-VPC-SG"
   description = "Allow HTTP and SSH"
   vpc_id      = aws_vpc.library_vpc.id
 
@@ -79,6 +79,12 @@ resource "aws_security_group" "ec2_sg" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
+  ingress {
+    from_port   = 0
+    to_port     = 65535
+    protocol    = "all-tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
   egress {
     from_port   = 0
     to_port     = 0
@@ -88,7 +94,7 @@ resource "aws_security_group" "ec2_sg" {
 }
 
 resource "aws_security_group" "rds_sg" {
-  name        = "library-rds-sg"
+  name        = "VPC-for-RDS-sg"
   description = "Allow MySQL traffic from EC2 strictly"
   vpc_id      = aws_vpc.library_vpc.id
 
@@ -130,14 +136,14 @@ resource "aws_instance" "app_server" {
     volume_type = "gp3"
   }
 
-  tags = { Name = "library-app-server" }
+  tags = { Name = "Library-app-instance" }
 }
 
 # ==========================================
 # 6. RDS Database (MySQL)
 # ==========================================
 resource "aws_db_subnet_group" "rds_subnet_group" {
-  name       = "library-db-subnet-group"
+  name       = "private-rds-subnet-group"
   subnet_ids = [aws_subnet.private_subnet_1.id, aws_subnet.private_subnet_2.id]
   tags = { Name = "library-db-subnet-group" }
 }
@@ -146,7 +152,7 @@ resource "aws_db_instance" "library_db" {
   identifier             = "library-app-db"
   engine                 = "mysql"
   engine_version         = "8.0"
-  instance_class         = "db.t3.micro"
+  instance_class         = "db.t4g.micro"
   allocated_storage      = 20
   db_name                = var.db_name
   username               = var.db_username
