@@ -40,7 +40,7 @@
                                 <span class="badge bg-secondary text-uppercase">Student</span>
                             {% endif %}
                         </td>
-                        <td class="text-center text-muted small">{{ user.registered_on[:10] }}</td>
+                        <td class="text-center text-muted small">{{ (user.registered_on | string)[:10] }}</td>
                         <td class="text-center">
                             <button class="btn btn-sm btn-outline-secondary me-1" data-bs-toggle="modal" data-bs-target="#editUserModal{{ user.id }}">Edit</button>
                             

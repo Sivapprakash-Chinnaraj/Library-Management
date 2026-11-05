@@ -24,7 +24,7 @@ pipeline {
             steps{
                 withCredentials([
                     usernamePassword(
-                        credentialsId: 'dockerhub-cred',
+                        credentialsId: 'Library-Management-Cred',
                         usernameVariable: 'DOCKER_USERNAME',
                         passwordVariable: 'DOCKER_PASSWORD'
                     )
@@ -47,7 +47,7 @@ pipeline {
             steps{
                 sh '''
                     docker rm -f $CONTAINER_NAME || true
-                    docker run -d --name $CONTAINER_NAME -p 9000:8000 $IMAGE_NAME
+                    docker run -d --name $CONTAINER_NAME -p 6969:8000 $IMAGE_NAME
                 '''
             }
         }
