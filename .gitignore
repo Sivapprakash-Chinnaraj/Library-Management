@@ -1,5 +1,4 @@
 __pycache__
-config.py
 *.tfvars
 *.tfvars
 *.tfstate
